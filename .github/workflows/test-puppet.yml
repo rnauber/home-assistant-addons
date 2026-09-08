@@ -4,9 +4,13 @@ on:
   pull_request:
     paths:
       - "puppet/ha-puppet/http.js"
+      - "puppet/ha-puppet/request-handler.js"
+      - "puppet/ha-puppet/cache.js"
+      - "puppet/ha-puppet/error.js"
       - "puppet/ha-puppet/screenshot.js"
       - "puppet/ha-puppet/shutdown.js"
       - "puppet/ha-puppet/test_shutdown.mjs"
+      - "puppet/ha-puppet/test_request_handler.mjs"
       - "puppet/ha-puppet/package.json"
       - "puppet/ha-puppet/package-lock.json"
       - ".github/workflows/test-puppet.yml"
@@ -15,9 +19,13 @@ on:
       - main
     paths:
       - "puppet/ha-puppet/http.js"
+      - "puppet/ha-puppet/request-handler.js"
+      - "puppet/ha-puppet/cache.js"
+      - "puppet/ha-puppet/error.js"
       - "puppet/ha-puppet/screenshot.js"
       - "puppet/ha-puppet/shutdown.js"
       - "puppet/ha-puppet/test_shutdown.mjs"
+      - "puppet/ha-puppet/test_request_handler.mjs"
       - "puppet/ha-puppet/package.json"
       - "puppet/ha-puppet/package-lock.json"
       - ".github/workflows/test-puppet.yml"
@@ -49,3 +57,4 @@ jobs:
         run: |
           cp options-dev.json.sample options-dev.json
           node --test test_shutdown.mjs
+          node --test test_request_handler.mjs

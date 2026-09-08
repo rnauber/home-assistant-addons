@@ -6,3 +6,11 @@ export class CannotOpenPageError extends Error {
     this.name = "CannotOpenPageError";
   }
 }
+
+export class BadRequestError extends Error {
+  constructor(message) {
+    super(message);
+    this.status = 400;
+    this.name = "BadRequestError";
+  }
+}

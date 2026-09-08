@@ -149,6 +149,31 @@ http://homeassistant.local:10000/home?next=300
 
 Providing a `next` parameter will not affect the current request. It will only be used for the next request.
 
+### Serving cached screenshots
+
+Fetching a screenshot is slow: the add-on launches or reuses a browser, navigates
+to your dashboard and waits for it to finish loading. If the same dashboard is
+fetched repeatedly (for example by a device polling every few seconds), you can
+have the add-on answer from its cache instead. Add the `fromcacheifyounger`
+parameter with the maximum age in seconds a previously rendered screenshot may
+have to be served instantly, or `always` to serve any previously rendered
+screenshot no matter how old it is.
+
+```
+# Serve the cached screenshot if one was rendered in the last 5 minutes.
+http://homeassistant.local:10000/home?viewport=1000x1000&fromcacheifyounger=300
+
+# Serve any previously rendered screenshot for these exact settings.
+http://homeassistant.local:10000/home?viewport=1000x1000&fromcacheifyounger=always
+```
+
+The cache matches on the exact combination of screenshot parameters (path,
+viewport, format, theme, colors, ...). Requests without `fromcacheifyounger`
+always render fresh and never use the cache. The first request with a new
+combination of parameters always renders; afterwards requests for the same
+parameters are served instantly until the cached copy is older than the given
+age.
+
 ## Using images inside Home Assistant
 
 You can use a template image entity to pull Puppet output into Home Assistant to make it possible to send it in notifications or use for other purposes.

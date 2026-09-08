@@ -13,7 +13,9 @@ puppet/
 ├── config.yaml              # Add-on configuration schema
 ├── Dockerfile              # Container definition
 ├── ha-puppet/              # Main application
-│   ├── http.js            # HTTP server & request handling
+│   ├── http.js            # Server bootstrap (RequestHandler wiring)
+│   ├── request-handler.js # HTTP request handling & screenshot cache
+│   ├── cache.js           # In-memory screenshot cache (LRU, byte-bounded)
 │   ├── screenshot.js      # Browser automation, dithering & screenshot logic
 │   ├── ui.js              # Web UI server-side rendering
 │   ├── bmp.js             # BMP image encoding (1/8/24-bit)
@@ -47,12 +49,14 @@ puppet/
 
 ### 1. HTTP Server (`http.js`)
 
-**RequestHandler Class:**
-- Listens on port 10000
+**RequestHandler Class (`request-handler.js`):**
+- `http.js` boots the server on port 10000 and delegates every request to it
 - Routes `/` to UI handler
 - Routes all other paths to screenshot handler
 - Implements request queuing (prevents concurrent requests)
 - Manages browser lifecycle with 30-second cleanup timeout
+- `fromcacheifyounger` parameter: serves cached screenshots before the queue
+  when a fresh-enough render exists (see Screenshot Cache below)
 
 **Key Methods:**
 - `start()` - Initialize HTTP server
@@ -141,6 +145,7 @@ Manages Puppeteer browser instance and screenshot generation.
 | rotate | number | Rotation degrees (90, 180, 270) | (empty) |
 | invert | boolean | Invert colors | false |
 | next | number | Auto-refresh interval in seconds | (empty) |
+| fromcacheifyounger | number/`always` | Serve cached screenshot if younger than N seconds | (empty) |
 
 **JavaScript Functions:**
 
@@ -176,21 +181,24 @@ Manages Puppeteer browser instance and screenshot generation.
 ```
 1. HTTP Request → http.js
    ↓
-2. Request queued if browser busy
+2. Parameters parsed (no browser access); fromcacheifyounger cache hit →
+   instant response without queueing
    ↓
-3. Browser.navigatePage(path, lang, theme, darkMode)
+3. Request queued if browser busy
+   ↓
+4. Browser.navigatePage(path, lang, theme, darkMode)
    - Initialize browser if needed
    - Set viewport
    - Inject auth tokens
    - Navigate to page
    - Apply settings
    ↓
-4. Browser.screenshotPage(viewport, options)
+5. Browser.screenshotPage(viewport, options)
    - Capture screenshot
    - Process image (rotate, e-ink, invert)
    - Encode format
    ↓
-5. Return image buffer
+5. Return image buffer (stored in cache for fromcacheifyounger keys)
    ↓
 6. HTTP Response (image/png, image/jpeg, etc.)
    ↓
@@ -228,9 +236,10 @@ Manages Puppeteer browser instance and screenshot generation.
 3. **Request Queuing**: Prevents concurrent browser operations
 4. **Navigation Optimization**: Uses `history.replaceState` + custom event vs full reload
 5. **Preloading**: `next` parameter warms up browser before fetch
-6. **PNG Fast Path**: Plain PNG requests (no rotate/invert/colors) skip the Sharp re-encode
-7. **Dithering Cache**: Palette lookups are memoized per image
-8. **Custom Wait Times**:
+6. **Screenshot Cache**: `fromcacheifyounger` serves prior renders for identical parameters before joining the request queue (see Screenshot Cache)
+7. **PNG Fast Path**: Plain PNG requests (no rotate/invert/colors) skip the Sharp re-encode
+8. **Dithering Cache**: Palette lookups are memoized per image
+9. **Custom Wait Times**:
    - 750ms default (add-on)
    - 500ms for local dev
    - +2s extra on cold start for icons/images
@@ -279,6 +288,7 @@ Returns screenshot of Home Assistant page
 - `rotate={degrees}` (optional, 90/180/270)
 - `invert` (optional, flag)
 - `next={seconds}` (optional, preload interval)
+- `fromcacheifyounger={seconds|always}` (optional, serve cached screenshot if rendered within the last N seconds, or `always` for any prior render)
 - `eink` (deprecated: `eink=2` converted to black/white `colors`; other values return 400)
 
 **Example:**
@@ -288,6 +298,26 @@ GET /home?viewport=1000x600&format=png&theme=midnight&dark&zoom=1.2
 
 ### GET /tailwind.css
 Static Tailwind CSS build used by the UI and error pages
+
+## Screenshot Cache (`cache.js`)
+
+Backs the `fromcacheifyounger` URL parameter:
+
+- Entries keyed by `JSON.stringify(requestParams)` — the full set of
+  image-shaping parameters. Two requests with identical parameters share an
+  entry; any parameter change (path, viewport, format, theme, colors, ...)
+  misses.
+- Only requests that opt in via `fromcacheifyounger` store screenshots, so
+  plain traffic never uses cache memory.
+- Byte-bounded LRU (64 MB) instead of a count cap: a single 4000x4000 24-bit
+  BMP is ~48 MB, so entry counts would not bound memory meaningfully.
+- `fromcacheifyounger={seconds}` serves an entry while
+  `now - createdAt <= seconds * 1000`; `always` skips the age check. An expired
+  entry is replaced by a fresh render, not evicted.
+- Cache hits are answered before the busy queue, so a cached response is
+  instant even while another render is in flight. A second re-check after
+  acquiring the browser lock serves the render a queued request just waited
+  for.
 
 ## Error Handling
 
@@ -320,6 +350,8 @@ home_assistant_url: "http://homeassistant:8123"  # HA base URL
 
 **Tests:**
 - BMP encoder: `node test_bmp.mjs` (assertion-based; also writes sample .bmp files)
+- Shutdown handlers: `node --test test_shutdown.mjs`
+- Request handler & screenshot cache: `node --test test_request_handler.mjs`
 
 **After changing HTML/Tailwind classes:**
 - Regenerate the static CSS: `npm run build:css`
@@ -337,7 +369,7 @@ home_assistant_url: "http://homeassistant:8123"  # HA base URL
 Potential improvements:
 - [ ] Authentication layer
 - [ ] Rate limiting
-- [ ] Screenshot caching
+- [x] Screenshot caching (done via `fromcacheifyounger`)
 - [ ] Multiple browser instances for concurrency
 - [ ] WebSocket support for real-time updates
 - [ ] Export/import preset functionality

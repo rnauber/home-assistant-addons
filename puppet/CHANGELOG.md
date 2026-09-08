@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.7.0
+
+- Add `fromcacheifyounger` URL parameter: serve a previously rendered
+  screenshot instantly when it is younger than the given number of seconds, or
+  use `fromcacheifyounger=always` to serve any prior render regardless of age
+- Cache matches on the exact screenshot parameters; requests without the
+  parameter always render fresh
+- Split request handling out of `http.js` into `request-handler.js` so it can
+  be tested (`node --test test_request_handler.mjs`)
+
 ## 2.6.0
 
 - Fix corrupted 24-bit BMP output for viewport widths not divisible by 4
