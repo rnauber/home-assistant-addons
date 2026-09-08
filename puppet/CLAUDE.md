@@ -318,6 +318,11 @@ Backs the `fromcacheifyounger` URL parameter:
   instant even while another render is in flight. A second re-check after
   acquiring the browser lock serves the render a queued request just waited
   for.
+- Combined with `next`, the cache self-refreshes: the pre-warm
+  (`prepareNextRequest`) renders a fresh screenshot and replaces the entry,
+  every cached serve re-arms the timer, and the pre-warm navigates with
+  `forceReload: true` (`Browser.navigatePage` option) so the capture reflects
+  the dashboard's current state rather than the DOM left by the last render.
 
 ## Error Handling
 

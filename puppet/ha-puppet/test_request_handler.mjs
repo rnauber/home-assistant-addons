@@ -260,6 +260,88 @@ test("fractional and zero seconds are accepted", async () => {
   assert.equal(zero.browser.renders, 2);
 });
 
+test("next pre-warm with fromcacheifyounger refreshes the cache with a fresh render", async () => {
+  const { browser, handler } = setup();
+  const params = {
+    viewport: "100x100",
+    fromcacheifyounger: "always",
+    // nextWaitTime = next*1000 - requestTime - navigationTime - 1000; the
+    // fake browser takes ~0ms, so next=2s fires ~1s later.
+    next: "2",
+  };
+
+  // Poll #1: renders, stores in cache, schedules the pre-warm timer
+  const first = await serve(handler, "/home", params);
+  assert.equal(browser.renders, 1);
+  assert.equal(browser.navigations, 1);
+
+  // Wait for the scheduled pre-warm to fire and finish (~1s + margin)
+  const deadline = Date.now() + 4000;
+  while (browser.renders < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  // Pre-warm rendered a fresh image into the cache
+  assert.equal(browser.renders, 2, "pre-warm must render and refresh cache");
+  assert.equal(browser.navigations, 2);
+  assert.equal(handler.cache.currentBytes > 0, true);
+
+  // Poll #2: instant serve of the refreshed image (different bytes)
+  const second = await serve(handler, "/home", params);
+  assert.equal(second.statusCode, 200);
+  assert.equal(browser.renders, 2, "second poll must not render again");
+  assert.notDeepEqual(
+    second.body,
+    first.body,
+    "served image must be the refreshed one",
+  );
+});
+
+test("next pre-warm without fromcacheifyounger only navigates (no cache memory)", async () => {
+  const { browser, handler } = setup();
+  await serve(handler, "/home", { viewport: "100x100", next: "2" });
+  assert.equal(browser.renders, 1);
+
+  // Wait for the scheduled pre-warm to fire (~1s + margin)
+  const deadline = Date.now() + 4000;
+  while (browser.navigations < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(browser.navigations, 2, "pre-warm navigates");
+  assert.equal(browser.renders, 1, "no screenshot render without a cache key");
+  assert.equal(handler.cache.currentBytes, 0);
+});
+
+test("cached serve re-arms the next pre-warm so the refresh chain continues", async () => {
+  const { browser, handler } = setup();
+  const params = {
+    viewport: "100x100",
+    fromcacheifyounger: "always",
+    next: "2",
+  };
+
+  // Poll 1 renders and schedules pre-warm #1
+  await serve(handler, "/home", params);
+  const deadline1 = Date.now() + 4000;
+  while (browser.renders < 2 && Date.now() < deadline1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(browser.renders, 2, "pre-warm #1 refreshed the cache");
+
+  // Poll 2 is a cached serve — it must schedule pre-warm #2
+  await serve(handler, "/home", params);
+  const deadline2 = Date.now() + 4000;
+  while (browser.renders < 3 && Date.now() < deadline2) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(browser.renders, 3, "cached serve re-armed the pre-warm");
+
+  // And the refreshed image is in the cache for the next poll
+  const third = await serve(handler, "/home", params);
+  assert.equal(third.statusCode, 200);
+  assert.equal(browser.renders, 3);
+});
+
 test("cache hit waits for an identical in-flight render instead of re-rendering", async () => {
   let releaseFirst;
   const gate = new Promise((resolve) => (releaseFirst = resolve));

@@ -398,6 +398,7 @@ export class Browser {
     lang,
     theme,
     dark,
+    forceReload = false,
   }) {
     let start = new Date();
     if (this.busy) {
@@ -432,10 +433,9 @@ export class Browser {
       let defaultWait = isAddOn ? 750 : 500;
       let openedNewPage = false;
 
-      // If we're still on about:blank, navigate to HA UI
-      if (this.lastRequestedPath === undefined) {
-        openedNewPage = true;
-
+      // If we're still on about:blank, or a reload is forced (cache pre-warm),
+      // navigate to HA UI
+      if (this.lastRequestedPath === undefined || forceReload) {
         // Ensure we have tokens when we open the UI
         const clientId = new URL("/", this.homeAssistantUrl).toString(); // http://homeassistant.local:8123/
         const hassUrl = clientId.substring(0, clientId.length - 1); // http://homeassistant.local:8123

@@ -7,6 +7,13 @@
   use `fromcacheifyounger=always` to serve any prior render regardless of age
 - Cache matches on the exact screenshot parameters; requests without the
   parameter always render fresh
+- Combining `next` with `fromcacheifyounger` gives a self-refreshing cache: the
+  pre-warm renders a fresh screenshot and replaces the cached entry, and every
+  cached serve re-arms the next pre-warm, so polling clients always get an
+  instant image that is at most one `next` interval old. The pre-warm forces a
+  full page reload so dashboards that do not live-update are still captured
+  fresh; `next` without `fromcacheifyounger` keeps its previous cheap
+  navigate-only warm-up
 - Split request handling out of `http.js` into `request-handler.js` so it can
   be tested (`node --test test_request_handler.mjs`)
 

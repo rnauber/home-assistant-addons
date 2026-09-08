@@ -377,14 +377,15 @@ export class RequestHandler {
     const { requestParams, next, cacheMode, cacheKey, format } = parsed;
 
     // Instant serve: a fresh-enough cached screenshot for these exact
-    // parameters is returned without ever joining the browser queue.
+    // parameters is returned without ever joining the browser queue. The next
+    // pre-warm is re-armed so the cache keeps refreshing for polling clients.
     if (cacheKey !== undefined && this.cache.has(cacheKey)) {
       if (this._serveFromCache(this.cache.get(cacheKey), cacheMode, format, response)) {
         console.log(requestId, "Serving from cache");
+        this._scheduleNextRequest(requestId, start, next, requestParams, cacheKey);
         return;
       }
     }
-
     if (this.busy) {
       console.log(requestId, "Busy, waiting in queue");
       await new Promise((resolve) => this.pending.push(resolve));
@@ -402,6 +403,7 @@ export class RequestHandler {
       if (cacheKey !== undefined && this.cache.has(cacheKey)) {
         if (this._serveFromCache(this.cache.get(cacheKey), cacheMode, format, response)) {
           console.log(requestId, "Serving from cache (after queue)");
+          this._scheduleNextRequest(requestId, start, next, requestParams, cacheKey);
           return;
         }
       }
@@ -460,39 +462,7 @@ export class RequestHandler {
       response.write(image);
       response.end();
 
-      if (!next) {
-        return;
-      }
-
-      // Adjust next based on time it took to process the request
-      const end = new Date();
-      const requestTime = end.getTime() - start.getTime();
-      const nextWaitTime =
-        // Convert to milliseconds
-        next * 1000 -
-        // We calculate next from the start of the request
-        requestTime -
-        // Start a bit earlier to account for the time browser warms up
-        this.navigationTime -
-        1000;
-
-      if (nextWaitTime < 0) {
-        return;
-      }
-      console.debug(requestId, `Next request in ${nextWaitTime} ms`);
-      const timer = setTimeout(() => {
-        // Remove ourselves from the pending list once fired, so the cap below
-        // only ever cancels timers that are still pending.
-        const idx = this.nextRequests.indexOf(timer);
-        if (idx !== -1) {
-          this.nextRequests.splice(idx, 1);
-        }
-        this.prepareNextRequest(requestId, requestParams);
-      }, nextWaitTime);
-      this.nextRequests.push(timer);
-      if (this.nextRequests.length > MAX_NEXT_REQUESTS) {
-        clearTimeout(this.nextRequests.shift());
-      }
+      this._scheduleNextRequest(requestId, start, next, requestParams, cacheKey);
     } finally {
       this.busy = false;
       const resolve = this.pending.shift();
@@ -503,7 +473,51 @@ export class RequestHandler {
     }
   }
 
-  async prepareNextRequest(requestId, requestParams) {
+  // Schedule the pre-warm for an expected future request (next parameter).
+  // Called after a fresh render and after a cached serve so the refresh chain
+  // keeps running as long as clients keep polling with next+fromcacheifyounger.
+  _scheduleNextRequest(requestId, start, next, requestParams, cacheKey) {
+    if (!next) {
+      return;
+    }
+
+    // Adjust next based on time it took to process the request
+    const end = new Date();
+    const requestTime = end.getTime() - start.getTime();
+    const nextWaitTime =
+      // Convert to milliseconds
+      next * 1000 -
+      // We calculate next from the start of the request
+      requestTime -
+      // Start a bit earlier to account for the time browser warms up
+      this.navigationTime -
+      1000;
+
+    if (nextWaitTime < 0) {
+      return;
+    }
+    console.debug(requestId, `Next request in ${nextWaitTime} ms`);
+    const timer = setTimeout(() => {
+      // Remove ourselves from the pending list once fired, so the cap below
+      // only ever cancels timers that are still pending.
+      const idx = this.nextRequests.indexOf(timer);
+      if (idx !== -1) {
+        this.nextRequests.splice(idx, 1);
+      }
+      this.prepareNextRequest(requestId, requestParams, cacheKey);
+    }, nextWaitTime);
+    this.nextRequests.push(timer);
+    if (this.nextRequests.length > MAX_NEXT_REQUESTS) {
+      clearTimeout(this.nextRequests.shift());
+    }
+  }
+
+  // Pre-warm ahead of an expected request (next parameter). With a cache key
+  // (fromcacheifyounger in use) this renders a fresh screenshot and replaces
+  // the cache entry, so the expected request is served instantly AND current.
+  // Without a cache key it only navigates, keeping the browser warm exactly as
+  // before this cache existed.
+  async prepareNextRequest(requestId, requestParams, cacheKey) {
     if (this.busy) {
       console.log("Busy, skipping next request");
       return;
@@ -512,8 +526,21 @@ export class RequestHandler {
     this.busy = true;
     console.log(requestId, "Preparing next request");
     try {
-      const navigateResult = await this.browser.navigatePage(requestParams);
+      // Force a full reload: the pre-warm must capture the dashboard's
+      // current state, not re-screenshot whatever DOM the last render left
+      // behind (real HA dashboards push live updates into the open tab, but
+      // the reload guarantees freshness for panels that do not).
+      const navigateResult = await this.browser.navigatePage({
+        ...requestParams,
+        forceReload: cacheKey !== undefined,
+      });
       console.debug(requestId, `Navigated in ${navigateResult.time} ms`);
+      if (cacheKey !== undefined) {
+        const screenshotResult =
+          await this.browser.screenshotPage(requestParams);
+        console.debug(requestId, `Screenshot in ${screenshotResult.time} ms`);
+        this.cache.put(cacheKey, screenshotResult.image);
+      }
     } catch (err) {
       console.error(requestId, "Error preparing next request", err);
     } finally {
