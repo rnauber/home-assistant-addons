@@ -6,7 +6,7 @@ import { installShutdownHandlers } from "./shutdown.js";
 
 const browser = new Browser(hassUrl, hassToken);
 const requestHandler = new RequestHandler(browser);
-const port = 10000;
+const port = process.env.PORT ? parseInt(process.env.PORT) : 10000;
 const server = http.createServer((request, response) =>
   requestHandler.handleRequest(request, response),
 );

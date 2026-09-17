@@ -174,6 +174,12 @@ combination of parameters always renders; afterwards requests for the same
 parameters are served instantly until the cached copy is older than the given
 age.
 
+**Note:** if you also pass `next`, the cached screenshot refreshes in the
+background ahead of each expected request. The refresh always fetches the
+dashboard fresh (the browser's HTTP cache is bypassed for that reload), so
+content changes appear on the next poll even when your dashboard or a reverse
+proxy sends `Cache-Control` headers.
+
 ## Using images inside Home Assistant
 
 You can use a template image entity to pull Puppet output into Home Assistant to make it possible to send it in notifications or use for other purposes.

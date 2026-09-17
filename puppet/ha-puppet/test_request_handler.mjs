@@ -36,8 +36,14 @@ function makeBrowser() {
   return {
     navigations: 0,
     renders: 0,
-    async navigatePage() {
+    // Sequence of setCacheEnabled values seen by navigatePage, so tests can
+    // assert the HTTP-cache bypass on cache pre-warms.
+    cacheToggles: [],
+    async navigatePage({ forceReload = false } = {}) {
       this.navigations++;
+      // Mirrors the real Browser: a forced reload (cache pre-warm) navigates
+      // with the HTTP cache disabled, then re-enables it.
+      this.cacheToggles.push(!forceReload, true);
       return { time: 10 };
     },
     async screenshotPage(requestParams) {
@@ -348,8 +354,10 @@ test("cache hit waits for an identical in-flight render instead of re-rendering"
   const slowBrowser = {
     navigations: 0,
     renders: 0,
-    async navigatePage() {
+    cacheToggles: [],
+    async navigatePage({ forceReload = false } = {}) {
       this.navigations++;
+      this.cacheToggles.push(!forceReload, true);
       return { time: 10 };
     },
     async screenshotPage() {
@@ -423,4 +431,40 @@ test("ScreenshotCache evicts least-recently-used entries by total bytes", () => 
   cache.put("a", Buffer.alloc(40));
   assert.equal(cache.currentBytes, 80);
   assert.equal(cache.has("c"), true);
+});
+
+test("next pre-warm navigates with the HTTP cache disabled and re-enables it", async () => {
+  const { browser, handler } = setup();
+  await serve(handler, "/home", {
+    viewport: "100x100",
+    fromcacheifyounger: "always",
+    next: "2",
+  });
+
+  // Wait for the pre-warm to fire (~1s + margin)
+  const deadline = Date.now() + 4000;
+  while (browser.renders < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(browser.renders, 2, "pre-warm rendered");
+
+  // First render (plain, HTTP cache on) then pre-warm (HTTP cache disabled,
+  // re-enabled after navigation). Without the bypass, dashboards served with
+  // Cache-Control (proxy, ingress) are re-served from Chromium's cache and
+  // the pre-warm captures stale HTML forever — the cache would never show
+  // updated content.
+  assert.deepEqual(browser.cacheToggles, [
+    true,
+    true, // poll #1: plain render, HTTP cache untouched
+    false,
+    true, // pre-warm: navigate bypassing HTTP cache, then restore
+  ]);
+});
+
+test("plain renders keep the HTTP cache enabled", async () => {
+  const { browser, handler } = setup();
+  await serve(handler, "/home", { viewport: "100x100" });
+  assert.equal(browser.renders, 1);
+  // Plain render (no forceReload): HTTP cache stays on for asset reuse.
+  assert.deepEqual(browser.cacheToggles, [true, true]);
 });

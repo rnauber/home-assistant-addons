@@ -323,6 +323,10 @@ Backs the `fromcacheifyounger` URL parameter:
   every cached serve re-arms the timer, and the pre-warm navigates with
   `forceReload: true` (`Browser.navigatePage` option) so the capture reflects
   the dashboard's current state rather than the DOM left by the last render.
+  The forced reload also disables the browser HTTP cache for that navigation
+  (`page.setCacheEnabled(false)`, re-enabled after) — otherwise dashboards
+  served with `Cache-Control` (reverse proxy, ingress) are re-served from
+  Chromium's cache and the pre-warm captures stale HTML forever.
 
 ## Error Handling
 

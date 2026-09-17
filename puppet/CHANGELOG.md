@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.7.1
+
+- Fix the `next` + `fromcacheifyounger` pre-warm capturing stale content
+  forever when the dashboard (or a reverse proxy / ingress in front of it)
+  sends `Cache-Control` headers: Chromium re-served the HTML from its own HTTP
+  cache on the forced reload, so the "fresh" screenshot was the old page. The
+  forced reload now bypasses the browser HTTP cache (re-enabled afterwards so
+  normal requests still benefit from asset caching)
+
 ## 2.7.0
 
 - Add `fromcacheifyounger` URL parameter: serve a previously rendered

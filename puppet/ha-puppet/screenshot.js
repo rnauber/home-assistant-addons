@@ -460,9 +460,15 @@ export class Browser {
           browserLocalStorage,
         );
 
-        // Open the HA UI
+        // Open the HA UI. A forced reload (cache pre-warm) must bypass the
+        // browser's HTTP cache: dashboards served with Cache-Control (proxy,
+        // ingress) would otherwise be re-served from Chromium's cache, and
+        // the pre-warm would capture stale HTML forever.
         const pageUrl = new URL(pagePath, this.homeAssistantUrl).toString();
+        const bypassHttpCache = forceReload;
+        await page.setCacheEnabled(!bypassHttpCache);
         const response = await page.goto(pageUrl);
+        await page.setCacheEnabled(true);
         if (!response || !response.ok()) {
           throw new CannotOpenPageError(response ? response.status() : 502, pageUrl);
         }
