@@ -176,7 +176,8 @@ age.
 
 **Note:** if you also pass `next`, the cached screenshot refreshes in the
 background ahead of each expected request. The refresh always fetches the
-dashboard fresh (the browser's HTTP cache is bypassed for that reload), so
+dashboard fresh — the browser's HTTP cache is bypassed for the whole forced
+reload, including the data your dashboard fetches after the page load — so
 content changes appear on the next poll even when your dashboard or a reverse
 proxy sends `Cache-Control` headers.
 

@@ -289,6 +289,10 @@ export class Browser {
     this.lastRequestedLang = undefined;
     this.lastRequestedTheme = undefined;
     this.lastRequestedDarkMode = undefined;
+    // True while a render runs with the HTTP cache disabled (bypassHttpCache);
+    // screenshotPage re-enables the cache once the capture is done so normal
+    // requests keep benefiting from it.
+    this.cacheBypassActive = false;
   }
 
   // Forget what state the page is in, forcing a full page navigation (and
@@ -298,6 +302,9 @@ export class Browser {
     this.lastRequestedLang = undefined;
     this.lastRequestedTheme = undefined;
     this.lastRequestedDarkMode = undefined;
+    // A render that never reached the screenshot must not leave the HTTP
+    // cache disabled for subsequent normal requests.
+    this.cacheBypassActive = false;
   }
 
   async cleanup({ throwOnError = false } = {}) {
@@ -399,6 +406,7 @@ export class Browser {
     theme,
     dark,
     forceReload = false,
+    bypassHttpCache = false,
   }) {
     let start = new Date();
     if (this.busy) {
@@ -464,11 +472,20 @@ export class Browser {
         // browser's HTTP cache: dashboards served with Cache-Control (proxy,
         // ingress) would otherwise be re-served from Chromium's cache, and
         // the pre-warm would capture stale HTML forever.
+        //
+        // Disabling the cache only around page.goto() is NOT enough: the HA
+        // frontend fetches its dashboard data (API/assets) after the load
+        // event, and those requests would be served from Chromium's cache,
+        // so the "fresh" screenshot still shows the previous state. The cache
+        // therefore stays disabled for the whole render; screenshotPage
+        // re-enables it once the capture is done (see cacheBypassActive).
         const pageUrl = new URL(pagePath, this.homeAssistantUrl).toString();
-        const bypassHttpCache = forceReload;
+        this.cacheBypassActive = bypassHttpCache;
         await page.setCacheEnabled(!bypassHttpCache);
         const response = await page.goto(pageUrl);
-        await page.setCacheEnabled(true);
+        if (!bypassHttpCache) {
+          await page.setCacheEnabled(true);
+        }
         if (!response || !response.ok()) {
           throw new CannotOpenPageError(response ? response.status() : 502, pageUrl);
         }
@@ -623,7 +640,7 @@ export class Browser {
     }
   }
 
-  async screenshotPage({ viewport, colors, paletteColors, dithering, invert, zoom, format, rotate, autoHeight = false, bmpMode = "color" }) {
+  async screenshotPage({ viewport, colors, paletteColors, dithering, invert, zoom, format, rotate, autoHeight = false, bmpMode = "color", bypassHttpCache = false }) {
     let start = new Date();
     if (this.busy) {
       throw new Error("Browser is busy");
@@ -662,6 +679,13 @@ export class Browser {
           height: clipHeight,
         },
       });
+
+      // A bypassed render is complete: re-enable the HTTP cache so normal
+      // requests keep benefiting from asset caching.
+      if (this.cacheBypassActive) {
+        this.cacheBypassActive = false;
+        await page.setCacheEnabled(true);
+      }
 
       // Fast path: Puppeteer already produced a PNG, so if no image
       // processing is requested we can skip the sharp decode/re-encode.

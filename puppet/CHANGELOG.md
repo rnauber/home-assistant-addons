@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.7.2
+
+- Fix the `next` + `fromcacheifyounger` image freezing on stale content: the
+  pre-warm timer was silently dropped once a single navigation took longer
+  than the poll interval (`navigationTime` is a running max), and with
+  `fromcacheifyounger` the client is served from cache, so the image never
+  updated again. The pre-warm timer is now scheduled with a clamped wait
+  instead of being dropped (plain `next` without `fromcacheifyounger` keeps
+  the previous behavior)
+- Fix the pre-warm's forced reload still capturing stale dashboard data when
+  the frontend fetches its data after the page load: the browser HTTP cache
+  is now bypassed for the whole forced render (navigate + screenshot) and
+  re-enabled afterwards, instead of only around the HTML navigation
+
 ## 2.7.1
 
 - Fix the `next` + `fromcacheifyounger` pre-warm capturing stale content

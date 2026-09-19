@@ -39,15 +39,21 @@ function makeBrowser() {
     // Sequence of setCacheEnabled values seen by navigatePage, so tests can
     // assert the HTTP-cache bypass on cache pre-warms.
     cacheToggles: [],
-    async navigatePage({ forceReload = false } = {}) {
+    async navigatePage({ forceReload = false, bypassHttpCache = false } = {}) {
       this.navigations++;
-      // Mirrors the real Browser: a forced reload (cache pre-warm) navigates
-      // with the HTTP cache disabled, then re-enables it.
-      this.cacheToggles.push(!forceReload, true);
+      // Mirrors the real Browser: a bypassed render disables the HTTP cache
+      // and keeps it disabled until screenshotPage re-enables it after the
+      // capture; a plain render leaves the cache enabled throughout.
+      this.cacheToggles.push(!bypassHttpCache);
       return { time: 10 };
     },
     async screenshotPage(requestParams) {
       this.renders++;
+      if (requestParams.bypassHttpCache) {
+        // Mirrors the real Browser: the capture completes the bypassed
+        // render, restoring the HTTP cache.
+        this.cacheToggles.push(true);
+      }
       return {
         image: Buffer.from(`img:${this.renders}:${requestParams.pagePath}`),
         time: 50,
@@ -355,9 +361,9 @@ test("cache hit waits for an identical in-flight render instead of re-rendering"
     navigations: 0,
     renders: 0,
     cacheToggles: [],
-    async navigatePage({ forceReload = false } = {}) {
+    async navigatePage({ bypassHttpCache = false } = {}) {
       this.navigations++;
-      this.cacheToggles.push(!forceReload, true);
+      this.cacheToggles.push(!bypassHttpCache);
       return { time: 10 };
     },
     async screenshotPage() {
@@ -448,16 +454,16 @@ test("next pre-warm navigates with the HTTP cache disabled and re-enables it", a
   }
   assert.equal(browser.renders, 2, "pre-warm rendered");
 
-  // First render (plain, HTTP cache on) then pre-warm (HTTP cache disabled,
-  // re-enabled after navigation). Without the bypass, dashboards served with
-  // Cache-Control (proxy, ingress) are re-served from Chromium's cache and
-  // the pre-warm captures stale HTML forever — the cache would never show
-  // updated content.
+  // First render (plain, HTTP cache on) then pre-warm (HTTP cache disabled
+  // for the WHOLE render, restored only after the screenshot). Disabling the
+  // cache only around page.goto() is not enough: the HA frontend fetches its
+  // dashboard data after the load event, and those requests would be served
+  // from Chromium's cache, so the pre-warm would capture stale dashboard
+  // data while the HTML itself is fresh.
   assert.deepEqual(browser.cacheToggles, [
-    true,
     true, // poll #1: plain render, HTTP cache untouched
     false,
-    true, // pre-warm: navigate bypassing HTTP cache, then restore
+    true, // pre-warm: bypassed navigate + capture, then restore
   ]);
 });
 
@@ -466,5 +472,53 @@ test("plain renders keep the HTTP cache enabled", async () => {
   await serve(handler, "/home", { viewport: "100x100" });
   assert.equal(browser.renders, 1);
   // Plain render (no forceReload): HTTP cache stays on for asset reuse.
-  assert.deepEqual(browser.cacheToggles, [true, true]);
+  assert.deepEqual(browser.cacheToggles, [true]);
+});
+
+test("pre-warm is scheduled even when the last navigation outlasted the next window", async () => {
+  // Regression: nextWaitTime = next*1000 - requestTime - navigationTime -
+  // 1000 went negative after one slow navigation and the timer was dropped.
+  // With fromcacheifyounger the client is served FROM CACHE, so the dropped
+  // pre-warm froze the image forever (every poll identical). The wait must
+  // clamp instead of dropping.
+  const { browser, handler } = setup();
+  const params = {
+    viewport: "100x100",
+    fromcacheifyounger: "always",
+    next: "2",
+  };
+
+  // One slow navigation poisons the running-max navigationTime, so every
+  // subsequent nextWaitTime is deeply negative.
+  handler.navigationTime = 60_000;
+
+  // Poll #1 renders and must STILL arm its (clamped) pre-warm.
+  const first = await serve(handler, "/home", params);
+  assert.equal(browser.renders, 1);
+
+  const deadline = Date.now() + 4000;
+  while (browser.renders < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(browser.renders, 2, "clamped pre-warm refreshed the cache");
+
+  // Poll #2 is a cached serve of the refreshed image
+  const second = await serve(handler, "/home", params);
+  assert.equal(second.statusCode, 200);
+  assert.notDeepEqual(second.body, first.body, "served image must update");
+});
+
+test("next without fromcacheifyounger still skips the pre-warm when the window is gone", async () => {
+  // Without a cache key every request renders fresh, so a missed pre-warm
+  // only loses the browser warm-up; keep the legacy drop behavior.
+  const { browser, handler } = setup();
+  // Poison navigationTime BEFORE the first request so the first poll's own
+  // pre-warm window is already gone.
+  handler.navigationTime = 60_000;
+  await serve(handler, "/home", { viewport: "100x100", next: "2" });
+  assert.equal(browser.renders, 1);
+
+  // Give any (dropped) timer a chance to fire
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(browser.navigations, 1, "no pre-warm navigation scheduled");
 });

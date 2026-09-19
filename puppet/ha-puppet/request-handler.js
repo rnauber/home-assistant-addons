@@ -484,7 +484,7 @@ export class RequestHandler {
     // Adjust next based on time it took to process the request
     const end = new Date();
     const requestTime = end.getTime() - start.getTime();
-    const nextWaitTime =
+    let nextWaitTime =
       // Convert to milliseconds
       next * 1000 -
       // We calculate next from the start of the request
@@ -494,7 +494,17 @@ export class RequestHandler {
       1000;
 
     if (nextWaitTime < 0) {
-      return;
+      // When a cache key exists the client will be SERVED FROM CACHE, so the
+      // pre-warm is the only thing keeping the cached image current: dropping
+      // the timer here would freeze the image forever once one navigation
+      // ran longer than the poll interval (navigationTime is a running max).
+      // Schedule immediately instead and let the next client poll re-arm a
+      // properly spaced timer. Without a cache key every request renders
+      // fresh anyway, so keep the old "no pre-warm" behavior.
+      if (cacheKey === undefined) {
+        return;
+      }
+      nextWaitTime = 1_000;
     }
     console.debug(requestId, `Next request in ${nextWaitTime} ms`);
     const timer = setTimeout(() => {
@@ -529,15 +539,23 @@ export class RequestHandler {
       // Force a full reload: the pre-warm must capture the dashboard's
       // current state, not re-screenshot whatever DOM the last render left
       // behind (real HA dashboards push live updates into the open tab, but
-      // the reload guarantees freshness for panels that do not).
+      // the reload guarantees freshness for panels that do not). The HTTP
+      // cache stays disabled for the whole render (navigate + screenshot):
+      // dashboards served with Cache-Control (proxy/ingress) fetch their data
+      // after the load event, so disabling it only around page.goto() would
+      // still capture stale dashboard data.
       const navigateResult = await this.browser.navigatePage({
         ...requestParams,
         forceReload: cacheKey !== undefined,
+        bypassHttpCache: cacheKey !== undefined,
       });
       console.debug(requestId, `Navigated in ${navigateResult.time} ms`);
       if (cacheKey !== undefined) {
         const screenshotResult =
-          await this.browser.screenshotPage(requestParams);
+          await this.browser.screenshotPage({
+            ...requestParams,
+            bypassHttpCache: true,
+          });
         console.debug(requestId, `Screenshot in ${screenshotResult.time} ms`);
         this.cache.put(cacheKey, screenshotResult.image);
       }
